@@ -5,13 +5,29 @@ on: [push, pull_request, workflow_dispatch]
 jobs:
   build:
     name: Build plugins
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout resources
+        uses: actions/checkout@v4
+        with:
+          repository: owncloud/client-desktop-shell-integration-resources
+          path: resources
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build tree
+          sudo apt-get install -y --no-install-recommends cmake ninja-build extra-cmake-modules tree
+
+      - name: Install resources
+        run: |
+          mkdir resources/build
+          pushd resources/build
+          cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -G Ninja
+          sudo ninja install
+
       - name: Build
         run: |
           mkdir build
