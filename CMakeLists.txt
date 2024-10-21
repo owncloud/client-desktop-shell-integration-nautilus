@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # we need at least one language for GNUInstallDirs
-project(owncloud-client-shell-integration-nautilus VERSION 6.0.0 LANGUAGES C)
+project(owncloud-client-shell-integration-nautilus VERSION 6.1.0 LANGUAGES C)
 
 option(REQUIRE_OWNCLOUD_RESOURCES "We depend on the ownCloud resources, if your distribution does provide alternative icons you can disable this requirement" ON)
 
