@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  
+
 jobs:
   release:
     name: Create Release
@@ -20,12 +20,12 @@ jobs:
 
       - name: Create archive
         run: |
-          tar --exclude='.git' --exclude='.github' -czf client-desktop-shell-integration-nautilus-${{ github.ref_name }}.tar.gz .
+          tar --exclude='.git' --exclude='.github' -czf /tmp/client-desktop-shell-integration-nautilus-${{ github.ref_name }}.tar.gz .
 
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          files: client-desktop-shell-integration-nautilus-${{ github.ref_name }}.tar.gz
+          files: /tmp/client-desktop-shell-integration-nautilus-${{ github.ref_name }}.tar.gz
           draft: false
           prerelease: false
         env:
