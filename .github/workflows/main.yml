@@ -9,12 +9,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Checkout resources
-        uses: actions/checkout@v4
         with:
-          repository: owncloud/client-desktop-shell-integration-resources
-          path: resources
+          submodules: true
 
       - name: Install dependencies
         run: |
