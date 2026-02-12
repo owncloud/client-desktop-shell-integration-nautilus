@@ -26,7 +26,7 @@ import socket
 import tempfile
 import time
 
-from gi.repository import GObject, Nautilus
+from gi.repository import GObject, GLib, Nautilus
 
 # Note: setappname.sh will search and replace 'ownCloud' on this file to update this line and other
 # occurrences of the name
@@ -70,13 +70,13 @@ class SocketConnect(GObject.GObject):
 
         # returns true when one should try again!
         if self._connectToSocketServer():
-            GObject.timeout_add(5000, self._connectToSocketServer)
+            GLib.timeout_add(5000, self._connectToSocketServer)
 
     def reconnect(self):
         self._sock.close()
         self.connected = False
-        GObject.source_remove(self._watch_id)
-        GObject.timeout_add(5000, self._connectToSocketServer)
+        GLib.source_remove(self._watch_id)
+        GLib.timeout_add(5000, self._connectToSocketServer)
 
     def sendCommand(self, cmd):
         # print("Server command: " + cmd)
@@ -99,7 +99,7 @@ class SocketConnect(GObject.GObject):
             try:
                 self._sock.connect(sock_file) # fails if sock_file doesn't exist
                 self.connected = True
-                self._watch_id = GObject.io_add_watch(self._sock, GObject.IO_IN, self._handle_notify)
+                self._watch_id = GLib.io_add_watch(self._sock, GLib.PRIORITY_DEFAULT, GLib.IOCondition.IN, self._handle_notify)
 
                 self.sendCommand('VERSION:\n')
                 self.sendCommand('GET_STRINGS:\n')
