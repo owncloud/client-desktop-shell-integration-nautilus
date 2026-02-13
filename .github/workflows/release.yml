@@ -28,6 +28,5 @@ jobs:
           files: /tmp/client-desktop-shell-integration-nautilus-${{ github.ref_name }}.tar.gz
           draft: false
           prerelease: false
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
