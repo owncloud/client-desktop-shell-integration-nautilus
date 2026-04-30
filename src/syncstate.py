@@ -23,10 +23,31 @@ import urllib
 if python3:
     import urllib.parse
 import socket
+import sqlite3
 import tempfile
 import time
 
 from gi.repository import GObject, GLib, Nautilus
+
+# Wayland clipboard support via GDK/GTK
+try:
+    import gi
+    try:
+        gi.require_version('Gdk', '4.0')
+        gi.require_version('Gtk', '4.0')
+    except ValueError:
+        gi.require_version('Gdk', '3.0')
+        gi.require_version('Gtk', '3.0')
+    from gi.repository import Gdk, Gtk
+    _GDK_AVAILABLE = True
+except ImportError:
+    _GDK_AVAILABLE = False
+
+def _is_wayland():
+    """Returns True if the current session is a native Wayland session."""
+    display = os.environ.get('WAYLAND_DISPLAY', '')
+    xdg_session = os.environ.get('XDG_SESSION_TYPE', '')
+    return bool(display) or xdg_session.lower() == 'wayland'
 
 # Note: setappname.sh will search and replace 'ownCloud' on this file to update this line and other
 # occurrences of the name
@@ -34,6 +55,7 @@ appname = 'ownCloud'
 
 print("Initializing "+appname+"-client-nautilus extension")
 print("Using python version {}".format(sys.version_info))
+print("Wayland session: {}".format(_is_wayland()))
 
 def get_local_path(url):
     if url[0:7] == 'file://':
@@ -65,7 +87,7 @@ class SocketConnect(GObject.GObject):
         self._listeners = [self._update_registered_paths, self._get_version]
         self._remainder = ''.encode('utf-8')
         self.protocolVersion = '1.0'
-        self.nautilusVFSFile_table = {}  # not needed in this object actually but shared 
+        self.nautilusVFSFile_table = {}  # not needed in this object actually but shared
                                          # all over the other objects.
 
         # returns true when one should try again!
@@ -174,6 +196,127 @@ class SocketConnect(GObject.GObject):
             self.protocolVersion = args[1]
 
 socketConnect = SocketConnect()
+
+
+def _copy_to_clipboard_wayland(text):
+    """Write text to clipboard using GTK — required on Wayland.
+
+    Under Wayland only the process that owns an active Wayland surface may
+    write to the clipboard.  The ownCloud background daemon has no window, so
+    its Qt-based QClipboard call is silently ignored by the compositor.
+    Nautilus itself *does* own a surface, so writing from here works on both
+    X11 and Wayland.
+
+    Falls back gracefully when GDK is not importable.
+    """
+    if not _GDK_AVAILABLE:
+        print("GDK not available, cannot copy to clipboard via GTK.")
+        return False
+
+    try:
+        if Gtk.get_major_version() >= 4:
+            clipboard = Gdk.Display.get_default().get_clipboard()
+            clipboard.set_content(Gdk.ContentProvider.new_for_bytes(
+                "text/plain;charset=utf-8",
+                GLib.Bytes.new(text.encode('utf-8'))
+            ))
+        else:
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(text, -1)
+            # store() makes the content survive after Nautilus loses focus
+            clipboard.store()
+        return True
+    except Exception as e:
+        print("GTK clipboard write failed: {}".format(e))
+        return False
+
+
+def _request_private_link(filename, timeout=1.0):
+    """Ask the ownCloud client for the private link of *filename* and return it.
+
+    Sends GET_PRIVATE_LINK:<filename> over the socket and waits up to
+    *timeout* seconds for a PRIVATE_LINK:<url> response.
+
+    Returns the URL string on success, or None on timeout / error.
+
+    Protocol note: GET_PRIVATE_LINK is the counterpart to COPY_PRIVATE_LINK.
+    Where COPY_PRIVATE_LINK tells the client to copy to its own clipboard,
+    GET_PRIVATE_LINK asks the client to send the URL back so that the
+    extension can write it to the clipboard itself — which is necessary under
+    Wayland (see _copy_to_clipboard_wayland).
+    """
+    if not socketConnect.connected:
+        return None
+
+    socketConnect.sendCommand(u'GET_PRIVATE_LINK:{}\n'.format(filename))
+
+    start = time.time()
+    while True:
+        remaining = timeout - (time.time() - start)
+        if remaining <= 0:
+            break
+
+        if not socketConnect.read_socket_data_with_timeout(remaining):
+            break
+
+        for line in socketConnect.get_available_responses():
+            if line.startswith('PRIVATE_LINK:'):
+                url = line[len('PRIVATE_LINK:'):]
+                if url:
+                    return url
+            else:
+                # let other listeners handle unrelated responses
+                socketConnect.handle_server_response(line)
+
+    return None
+
+
+def _get_private_link_from_db(filename):
+    # Derives the private link URL from the local sync journal and config.
+    # Used when the client does not support GET_PRIVATE_LINK (all current versions).
+    path = filename.rstrip(os.sep)
+    sync_root = None
+    while True:
+        if os.path.exists(os.path.join(path, '.sync_journal.db')):
+            sync_root = path
+            break
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+    rel = os.path.relpath(filename.rstrip(os.sep), sync_root)
+    journal = os.path.join(sync_root, '.sync_journal.db')
+    tmp = os.path.join(tempfile.gettempdir(), '_oc_journal_{}.db'.format(os.getpid()))
+    try:
+        with open(journal, 'rb') as src, open(tmp, 'wb') as dst:
+            dst.write(src.read())
+        conn = sqlite3.connect(tmp)
+        row = conn.execute('SELECT fileid FROM metadata WHERE path=?', (rel,)).fetchone()
+        conn.close()
+    except Exception as e:
+        print('{}: journal read error: {}'.format(appname, e))
+        return None
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+    if not row or not row[0]:
+        return None
+
+    cfg = os.path.expanduser('~/.config/ownCloud/{}.cfg'.format(appname.lower()))
+    try:
+        with open(cfg) as f:
+            for line in f:
+                line = line.strip()
+                if '\\url=' in line and 'dav' not in line.lower() and line[:1].isdigit():
+                    server = line.split('=', 1)[1].strip().rstrip('/')
+                    return '{}/index.php/f/{}'.format(server, row[0])
+    except Exception as e:
+        print('{}: config read error: {}'.format(appname, e))
+    return None
 
 
 class MenuExtension_ownCloud(GObject.GObject, Nautilus.MenuProvider):
@@ -366,6 +509,16 @@ class MenuExtension_ownCloud(GObject.GObject, Nautilus.MenuProvider):
 
     def context_menu_action(self, menu, action, filename):
         # print("Context menu: " + action + ' ' + filename)
+
+        if action == 'COPY_PRIVATE_LINK' and _is_wayland() and _GDK_AVAILABLE:
+            # On Wayland, Qt/QClipboard is silently dropped when the client has
+            # no active surface. Nautilus does, so we fetch the URL and write
+            # it ourselves via GTK.
+            single = filename.split('\x1e')[0]
+            link = _get_private_link_from_db(single) or _request_private_link(single)
+            if link and _copy_to_clipboard_wayland(link):
+                return
+
         socketConnect.sendCommand(action + ":" + filename + "\n")
 
 
