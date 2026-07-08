@@ -28,6 +28,47 @@ import time
 
 from gi.repository import GObject, GLib, Nautilus
 
+def _is_wayland():
+    return bool(os.environ.get('WAYLAND_DISPLAY')) \
+        or os.environ.get('XDG_SESSION_TYPE', '').lower() == 'wayland'
+
+def _copy_to_clipboard_gtk(text):
+    try:
+        from gi.repository import Gdk, Gtk, GLib
+        if Gtk.get_major_version() >= 4:
+            clipboard = Gdk.Display.get_default().get_clipboard()
+            clipboard.set_content(
+                Gdk.ContentProvider.new_for_bytes(
+                    'text/plain;charset=utf-8',
+                    GLib.Bytes.new(text.encode('utf-8'))
+                )
+            )
+        else:
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(text, -1)
+            clipboard.store()
+        return True
+    except Exception as e:
+        print('{}: GTK clipboard write failed: {}'.format(appname, e))
+        return False
+
+def _request_private_link(filename, timeout=0.5):
+    if not socketConnect.connected:
+        return None
+    socketConnect.sendCommand(u'GET_PRIVATE_LINK:{}\n'.format(filename))
+    start = time.time()
+    while True:
+        remaining = timeout - (time.time() - start)
+        if remaining <= 0:
+            break
+        if not socketConnect.read_socket_data_with_timeout(remaining):
+            break
+        for line in socketConnect.get_available_responses():
+            if line.startswith('PRIVATE_LINK:'):
+                return line[len('PRIVATE_LINK:'):]
+            socketConnect.handle_server_response(line)
+    return None
+
 # Note: setappname.sh will search and replace 'ownCloud' on this file to update this line and other
 # occurrences of the name
 appname = 'ownCloud'
@@ -366,7 +407,13 @@ class MenuExtension_ownCloud(GObject.GObject, Nautilus.MenuProvider):
 
     def context_menu_action(self, menu, action, filename):
         # print("Context menu: " + action + ' ' + filename)
-        socketConnect.sendCommand(action + ":" + filename + "\n")
+        if action == 'COPY_PRIVATE_LINK' and _is_wayland():
+            single = filename.split('\x1e')[0]
+            link = _request_private_link(single)
+            if link and _copy_to_clipboard_gtk(link):
+                return
+            # Fall through on timeout (old client) or GTK failure.
+        socketConnect.sendCommand(action + ':' + filename + '\n')
 
 
 class SyncStateExtension_ownCloud(GObject.GObject, Nautilus.InfoProvider):
