@@ -2,6 +2,9 @@ name: Build
 
 on: [push, pull_request, workflow_dispatch]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build plugins
@@ -9,12 +12,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Checkout resources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: owncloud/client-desktop-shell-integration-resources
           path: resources
+          persist-credentials: false
 
       - name: Install dependencies
         run: |
